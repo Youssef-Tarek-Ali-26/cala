@@ -906,7 +906,7 @@ impl EffectiveBalanceRepo {
         &self,
         op: &mut impl es_entity::AtomicOperation,
         journal_id: JournalId,
-        (account_ids, currencies): (Vec<AccountId>, Vec<&str>),
+        (account_ids, currencies): (Vec<AccountId>, Vec<String>),
         effective: NaiveDate,
     ) -> Result<HashMap<(AccountId, Currency), EffectiveBalanceData<'_>>, BalanceError> {
         let rows = sqlx::query!(
@@ -987,7 +987,7 @@ impl EffectiveBalanceRepo {
         "#,
             journal_id as JournalId,
             &account_ids as &[AccountId],
-            &currencies as &[&str],
+            &currencies as &[String],
             effective
         )
         .fetch_all(op.as_executor())
@@ -1035,7 +1035,7 @@ impl EffectiveBalanceRepo {
         &self,
         op: &mut impl es_entity::AtomicOperation,
         journal_id: JournalId,
-        (account_ids, currencies): (Vec<AccountId>, Vec<&str>),
+        (account_ids, currencies): (Vec<AccountId>, Vec<String>),
         effective: NaiveDate,
     ) -> Result<HashMap<(AccountId, Currency), EffectiveBalanceData<'_>>, BalanceError> {
         let rows = sqlx::query!(
@@ -1116,7 +1116,7 @@ impl EffectiveBalanceRepo {
         "#,
             journal_id as JournalId,
             &account_ids as &[AccountId],
-            &currencies as &[&str],
+            &currencies as &[String],
             effective
         )
         .fetch_all(op.as_executor())

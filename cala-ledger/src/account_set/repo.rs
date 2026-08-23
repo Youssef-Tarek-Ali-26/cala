@@ -1295,7 +1295,7 @@ impl AccountSetRepo {
         &self,
         op: impl es_entity::IntoOneTimeExecutor<'_>,
         journal_id: JournalId,
-        (account_ids, currencies): &(Vec<AccountId>, Vec<&str>),
+        (account_ids, currencies): &(Vec<AccountId>, Vec<String>),
     ) -> Result<HashMap<AccountId, Vec<AccountSetId>>, AccountSetError> {
         // Adjacency-only membership: resolve each account's ancestor sets
         // by an upward recursive walk over the (tiny) set->set edge table,
@@ -1344,7 +1344,7 @@ impl AccountSetRepo {
           "#,
             journal_id as JournalId,
             account_ids as &[AccountId],
-            currencies as &[&str],
+            currencies as &[String],
         ))
         .await?;
         let mut mappings = HashMap::new();
@@ -1384,7 +1384,7 @@ impl AccountSetRepo {
         &self,
         op: &mut impl es_entity::AtomicOperation,
         journal_id: JournalId,
-        (set_ids, currencies): &(Vec<AccountSetId>, Vec<&str>),
+        (set_ids, currencies): &(Vec<AccountSetId>, Vec<String>),
     ) -> Result<(), AccountSetError> {
         if set_ids.is_empty() {
             return Ok(());
@@ -1398,7 +1398,7 @@ impl AccountSetRepo {
             "#,
             journal_id as JournalId,
             set_ids as &[AccountSetId],
-            currencies as &[&str],
+            currencies as &[String],
         )
         .execute(op.as_executor())
         .await?;

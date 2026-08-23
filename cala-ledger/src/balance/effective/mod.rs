@@ -246,7 +246,7 @@ impl EffectiveBalances {
         effective: NaiveDate,
         created_at: DateTime<Utc>,
         mappings: HashMap<AccountId, Vec<AccountSetId>>,
-        balance_ids: (Vec<AccountId>, Vec<&str>),
+        balance_ids: (Vec<AccountId>, Vec<String>),
     ) -> Result<(), BalanceError> {
         let mut all_data = self
             .repo
@@ -302,7 +302,7 @@ impl EffectiveBalances {
         effective: NaiveDate,
         created_at: DateTime<Utc>,
         ec_mappings: HashMap<AccountId, Vec<AccountSetId>>,
-        balance_ids: (Vec<AccountId>, Vec<&str>),
+        balance_ids: (Vec<AccountId>, Vec<String>),
         ec_leaves: &HashSet<AccountId>,
     ) -> Result<(), BalanceError> {
         let mut all_data = self

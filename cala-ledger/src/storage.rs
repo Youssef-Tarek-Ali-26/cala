@@ -7,10 +7,15 @@
 //! read. The invariant is not valid for Turso's default deferred transaction or
 //! its concurrent-write mode.
 
-// This Day-1 seam intentionally lands before the Postgres repositories are
-// threaded through it. Its tests exercise the real implementation in the
-// meantime; remove this allowance when the first repository adopts `Db`.
+// The Turso repository port remains deliberately private until its transaction
+// graph can replace (rather than mix with) the public Postgres services. It
+// does not yet implement outbox publication or durable idempotent retry
+// results and is not authority-ready. Its contract tests exercise the
+// implementation in the meantime; remove this allowance when the public
+// engine consumes the Turso repositories.
 #![allow(dead_code)]
+
+mod journal_account;
 
 use std::time::Duration;
 
@@ -76,9 +81,13 @@ pub(crate) struct Db {
     read_connection: turso::Connection,
 }
 
-/// A query-only view backed by a connection with `PRAGMA query_only = ON`.
+/// A query-only snapshot backed by a connection with `PRAGMA query_only = ON`.
+///
+/// The deferred transaction establishes its snapshot on the first read and
+/// keeps identity, projection, and event-stream reads on that same snapshot.
+/// Construction is private to [`Db::begin_read`].
 pub(crate) struct ReadOp<'connection> {
-    connection: &'connection turso::Connection,
+    transaction: turso::transaction::Transaction<'connection>,
 }
 
 /// The only operation allowed to mutate authoritative CALA state.
@@ -136,7 +145,7 @@ impl Db {
         let read_connection = database.connect()?;
         configure_read_connection(&read_connection).await?;
 
-        let db = Self {
+        let mut db = Self {
             write_connection,
             read_connection,
         };
@@ -144,10 +153,12 @@ impl Db {
         Ok(db)
     }
 
-    pub(crate) fn read(&self) -> ReadOp<'_> {
-        ReadOp {
-            connection: &self.read_connection,
-        }
+    pub(crate) async fn begin_read(&mut self) -> Result<ReadOp<'_>, StorageError> {
+        let transaction = self
+            .read_connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .await?;
+        Ok(ReadOp { transaction })
     }
 
     /// Acquire authority before reading the state that a mutation will validate.
@@ -358,36 +369,61 @@ impl Db {
         rollback_scope(write, outcome).await
     }
 
-    async fn validate_existing_migrations(&self) -> Result<(), StorageError> {
-        let migration_table_exists = query_i64(
-            &self.read(),
-            "SELECT EXISTS(\
+    async fn validate_existing_migrations(&mut self) -> Result<(), StorageError> {
+        let read = self.begin_read().await?;
+        let outcome = async {
+            let migration_table_exists = query_i64(
+                &read,
+                "SELECT EXISTS(\
                  SELECT 1 FROM sqlite_schema \
                  WHERE type = 'table' AND name = 'cala_schema_migrations'\
              )",
-        )
-        .await?;
-        if migration_table_exists == 0 {
-            return Ok(());
-        }
-
-        let mut rows = self
-            .read()
-            .query(
-                "SELECT version, name, source_fingerprint \
-                 FROM cala_schema_migrations ORDER BY version",
-                (),
             )
             .await?;
-        while let Some(row) = rows.next().await? {
-            let version = row.get::<i64>(0)?;
-            if version != CORE_SCHEMA_VERSION {
-                return Err(StorageError::UnsupportedMigration { version });
+            if migration_table_exists == 0 {
+                let preexisting_cala_objects = query_i64(
+                    &read,
+                    "SELECT COUNT(*) FROM sqlite_schema \
+                     WHERE type IN ('table', 'index', 'view', 'trigger') \
+                       AND substr(name, 1, 5) = 'cala_'",
+                )
+                .await?;
+                if preexisting_cala_objects != 0 {
+                    return Err(StorageError::IncompatibleEngine(format!(
+                        "database contains {preexisting_cala_objects} pre-existing cala_* schema \
+                         objects but no cala_schema_migrations metadata"
+                    )));
+                }
+                return Ok(());
             }
-            validate_migration_identity(version, row.get::<String>(1)?, row.get::<String>(2)?)?;
+
+            let mut rows = read
+                .query(
+                    "SELECT version, name, source_fingerprint \
+                 FROM cala_schema_migrations ORDER BY version",
+                    (),
+                )
+                .await?;
+            let mut saw_migration = false;
+            while let Some(row) = rows.next().await? {
+                saw_migration = true;
+                let version = row.get::<i64>(0)?;
+                if version != CORE_SCHEMA_VERSION {
+                    return Err(StorageError::UnsupportedMigration { version });
+                }
+                validate_migration_identity(version, row.get::<String>(1)?, row.get::<String>(2)?)?;
+            }
+            drop(rows);
+            if !saw_migration {
+                return Err(StorageError::IncompatibleEngine(
+                    "database contains cala_schema_migrations without a recorded migration"
+                        .to_owned(),
+                ));
+            }
+            Ok(())
         }
-        drop(rows);
-        Ok(())
+        .await;
+        close_read_scope(read, outcome).await
     }
 
     #[cfg(test)]
@@ -402,7 +438,11 @@ impl ReadOp<'_> {
         sql: &str,
         params: impl turso::IntoParams,
     ) -> Result<turso::Rows, StorageError> {
-        Ok(self.connection.query(sql, params).await?)
+        Ok(self.transaction.query(sql, params).await?)
+    }
+
+    pub(crate) async fn close(self) -> Result<(), StorageError> {
+        Ok(self.transaction.rollback().await?)
     }
 }
 
@@ -600,6 +640,31 @@ async fn rollback_after_error<T>(
     }
 }
 
+async fn close_read_scope<T>(
+    read: ReadOp<'_>,
+    outcome: Result<T, StorageError>,
+) -> Result<T, StorageError> {
+    let close = read.close().await;
+    match (outcome, close) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(operation), Ok(())) => Err(operation),
+        (Err(operation), Err(StorageError::Turso(rollback))) => Err(StorageError::RollbackFailed {
+            operation: Box::new(operation),
+            rollback,
+        }),
+        (Ok(_), Err(StorageError::Turso(rollback))) => {
+            Err(StorageError::RollbackAfterSuccess(rollback))
+        }
+        (_, Err(other)) => Err(other),
+    }
+}
+
+async fn query_db_i64(db: &mut Db, sql: &str) -> Result<i64, StorageError> {
+    let read = db.begin_read().await?;
+    let outcome = query_i64(&read, sql).await;
+    close_read_scope(read, outcome).await
+}
+
 async fn query_i64(operation: &impl QueryOperation, sql: &str) -> Result<i64, StorageError> {
     let mut rows = operation.query_no_params(sql).await?;
     let value = rows
@@ -717,8 +782,8 @@ mod tests {
         let mut db = Db::open(":memory:").await.expect("open Turso database");
         db.migrate(TEST_TIME).await.expect("run migration");
 
-        let attempted_dml = db
-            .read()
+        let read = db.begin_read().await.expect("begin query-only snapshot");
+        let attempted_dml = read
             .query(
                 "INSERT INTO cala_journals \
                  (id, version, name, status, payload, created_at, modified_at) \
@@ -740,8 +805,9 @@ mod tests {
                 || rejected.to_ascii_lowercase().contains("query_only"),
             "unexpected query-only rejection: {rejected}"
         );
+        read.close().await.expect("close query-only snapshot");
         assert_eq!(
-            query_i64(&db.read(), "SELECT COUNT(*) FROM cala_journals")
+            query_db_i64(&mut db, "SELECT COUNT(*) FROM cala_journals")
                 .await
                 .expect("count journals"),
             0
@@ -754,6 +820,7 @@ mod tests {
         db.migrate(TEST_TIME).await.expect("run first migration");
         db.migrate(TEST_TIME).await.expect("rerun first migration");
 
+        let read = db.begin_read().await.expect("begin schema snapshot");
         for table in [
             "cala_schema_migrations",
             "cala_journals",
@@ -767,8 +834,7 @@ mod tests {
             "cala_outbox_events",
             "cala_idempotency_results",
         ] {
-            let mut rows = db
-                .read()
+            let mut rows = read
                 .query(
                     "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = ?1",
                     (table,),
@@ -785,6 +851,7 @@ mod tests {
             drop(rows);
             assert_eq!(count, 1, "missing migrated table {table}");
         }
+        read.close().await.expect("close schema snapshot");
     }
 
     #[tokio::test]
@@ -824,8 +891,8 @@ mod tests {
             "migration error must explicitly rollback before return"
         );
         assert_eq!(
-            query_i64(
-                &db.read(),
+            query_db_i64(
+                &mut db,
                 "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name = 'cala_journals')"
             )
             .await
@@ -898,6 +965,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn open_rejects_preexisting_cala_schema_without_migration_metadata() {
+        let directory = tempfile::tempdir().expect("create temporary directory");
+        let path = directory.path().join("unowned-schema.db");
+        let path = path.to_str().expect("utf-8 temporary path");
+
+        let database = turso::Builder::new_local(path)
+            .build()
+            .await
+            .expect("open raw Turso database");
+        let connection = database.connect().expect("connect raw Turso database");
+        connection
+            .execute_batch("CREATE TABLE cala_journals (id TEXT PRIMARY KEY) STRICT;")
+            .await
+            .expect("create unowned CALA table");
+        drop(connection);
+        drop(database);
+
+        let error = Db::open(path)
+            .await
+            .expect_err("unversioned CALA schema must not be blessed by migration");
+        assert!(matches!(
+            error,
+            StorageError::IncompatibleEngine(message)
+                if message.contains("pre-existing cala_* schema")
+        ));
+    }
+
+    #[tokio::test]
+    async fn open_rejects_empty_migration_metadata() {
+        let directory = tempfile::tempdir().expect("create temporary directory");
+        let path = directory.path().join("empty-metadata.db");
+        let path = path.to_str().expect("utf-8 temporary path");
+
+        let database = turso::Builder::new_local(path)
+            .build()
+            .await
+            .expect("open raw Turso database");
+        let connection = database.connect().expect("connect raw Turso database");
+        connection
+            .execute_batch(
+                "CREATE TABLE cala_schema_migrations (\
+                     version INTEGER PRIMARY KEY,\
+                     name TEXT NOT NULL UNIQUE,\
+                     source_fingerprint TEXT NOT NULL,\
+                     applied_at TEXT NOT NULL\
+                 ) STRICT;",
+            )
+            .await
+            .expect("create empty migration metadata");
+        drop(connection);
+        drop(database);
+
+        let error = Db::open(path)
+            .await
+            .expect_err("empty migration metadata must fail closed");
+        assert!(matches!(
+            error,
+            StorageError::IncompatibleEngine(message)
+                if message.contains("without a recorded migration")
+        ));
+    }
+
+    #[tokio::test]
     async fn exact_pinned_engine_executes_required_sql_feature_probe() {
         let mut db = Db::open(":memory:").await.expect("open Turso database");
         db.migrate(TEST_TIME).await.expect("run migration");
@@ -925,7 +1055,7 @@ mod tests {
             .expect("insert journal inside authority transaction");
         write.rollback().await.expect("rollback authority write");
 
-        let count = query_i64(&db.read(), "SELECT COUNT(*) FROM cala_journals")
+        let count = query_db_i64(&mut db, "SELECT COUNT(*) FROM cala_journals")
             .await
             .expect("count journals");
         assert_eq!(count, 0);
@@ -955,7 +1085,7 @@ mod tests {
             StorageError::Turso(turso::Error::Busy(_))
         ));
         assert_eq!(
-            query_i64(&second.read(), "SELECT COUNT(*) FROM cala_journals")
+            query_db_i64(&mut second, "SELECT COUNT(*) FROM cala_journals")
                 .await
                 .expect("read committed state while writer is open"),
             0,
@@ -964,7 +1094,7 @@ mod tests {
 
         first_write.commit().await.expect("commit first writer");
         assert_eq!(
-            query_i64(&second.read(), "SELECT COUNT(*) FROM cala_journals")
+            query_db_i64(&mut second, "SELECT COUNT(*) FROM cala_journals")
                 .await
                 .expect("read committed state"),
             1

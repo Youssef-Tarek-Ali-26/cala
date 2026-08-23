@@ -25,7 +25,7 @@ pub enum VelocityError {
     #[error("VelocityError - Could not find control by id: {0}")]
     CouldNotFindControlById(VelocityControlId),
     #[error("VelocityError - Enforcement: {0}")]
-    Enforcement(#[from] LimitExceededError),
+    Enforcement(Box<LimitExceededError>),
     #[error("VelocityError - HydrationError: {0}")]
     HydrationError(#[from] es_entity::EntityHydrationError),
     #[error("VelocityError - VelocityControlCreate: {0}")]
@@ -50,6 +50,12 @@ pub enum VelocityError {
     LimitIdAlreadyExists(String),
     #[error("VelocityError - Limit already added to Control")]
     LimitAlreadyAddedToControl,
+}
+
+impl From<LimitExceededError> for VelocityError {
+    fn from(error: LimitExceededError) -> Self {
+        Self::Enforcement(Box::new(error))
+    }
 }
 
 impl From<VelocityControlFindError> for VelocityError {

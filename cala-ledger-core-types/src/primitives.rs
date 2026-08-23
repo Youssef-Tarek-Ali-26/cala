@@ -1,9 +1,5 @@
 use rusty_money::{crypto, iso};
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    sync::{OnceLock, RwLock},
-};
 
 use cel_interpreter::{CelResult, CelType, CelValue, ResultCoercionError};
 
@@ -168,39 +164,22 @@ impl From<Layer> for CelValue {
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-pub enum Currency {
-    Iso(&'static iso::Currency),
-    Crypto(&'static crypto::Currency),
-    /// A caller-defined conserved unit. Custom codes are process-interned so
-    /// `Currency` stays `Copy`, preserving Cala's public API and balance-key
-    /// representation while allowing non-monetary ledgers.
-    Custom(&'static str),
+const MAX_CUSTOM_UNIT_CODE_LEN: usize = 64;
+
+/// A validated caller-defined conserved-unit code stored entirely inline.
+///
+/// Inline storage keeps [`Currency`] `Copy` without process-global interning,
+/// allocation leaks, mutable registries, or parse-order-dependent failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CustomUnitCode {
+    length: u8,
+    bytes: [u8; MAX_CUSTOM_UNIT_CODE_LEN],
 }
 
-impl Currency {
-    const MAX_CUSTOM_CODES: usize = 65_536;
-
-    pub const BTC: Self = Self::Crypto(crypto::BTC);
-    pub const USD: Self = Self::Iso(iso::USD);
-
-    pub fn code(&self) -> &'static str {
-        match self {
-            Currency::Iso(c) => c.iso_alpha_code,
-            Currency::Crypto(c) => c.code,
-            Currency::Custom(code) => code,
-        }
-    }
-
-    fn custom_codes() -> &'static RwLock<HashMap<String, &'static str>> {
-        static CUSTOM_CODES: OnceLock<RwLock<HashMap<String, &'static str>>> = OnceLock::new();
-        CUSTOM_CODES.get_or_init(|| RwLock::new(HashMap::new()))
-    }
-
-    fn parse_custom(code: &str) -> Result<Self, ParseCurrencyError> {
+impl CustomUnitCode {
+    fn parse(code: &str) -> Result<Self, ParseCurrencyError> {
         let valid = !code.is_empty()
-            && code.len() <= 64
+            && code.len() <= MAX_CUSTOM_UNIT_CODE_LEN
             && code.bytes().all(|byte| {
                 byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':' | b'/')
             });
@@ -208,25 +187,81 @@ impl Currency {
             return Err(ParseCurrencyError::InvalidUnitCode(code.to_owned()));
         }
 
-        let mut codes = Self::custom_codes()
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(interned) = codes.get(code) {
-            return Ok(Self::Custom(interned));
-        }
-        if codes.len() >= Self::MAX_CUSTOM_CODES {
-            return Err(ParseCurrencyError::CustomUnitRegistryFull);
-        }
+        let mut bytes = [0; MAX_CUSTOM_UNIT_CODE_LEN];
+        bytes[..code.len()].copy_from_slice(code.as_bytes());
+        Ok(Self {
+            length: u8::try_from(code.len()).expect("validated custom-unit length fits u8"),
+            bytes,
+        })
+    }
 
-        let interned = Box::leak(code.to_owned().into_boxed_str());
-        codes.insert(code.to_owned(), interned);
-        Ok(Self::Custom(interned))
+    pub fn as_str(&self) -> &str {
+        // Construction admits ASCII bytes only, and ASCII is valid UTF-8.
+        std::str::from_utf8(&self.bytes[..usize::from(self.length)])
+            .expect("validated custom-unit code must remain UTF-8")
+    }
+}
+
+impl std::fmt::Display for CustomUnitCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq)]
+pub enum Currency {
+    Iso(&'static iso::Currency),
+    Crypto(&'static crypto::Currency),
+    /// A caller-defined conserved unit held inline with no global registry.
+    Custom(CustomUnitCode),
+}
+
+impl Currency {
+    pub const BTC: Self = Self::Crypto(crypto::BTC);
+    pub const USD: Self = Self::Iso(iso::USD);
+
+    pub fn code(&self) -> &str {
+        match self {
+            Currency::Iso(c) => c.iso_alpha_code,
+            Currency::Crypto(c) => c.code,
+            Currency::Custom(code) => code.as_str(),
+        }
+    }
+
+    fn parse_custom(code: &str) -> Result<Self, ParseCurrencyError> {
+        CustomUnitCode::parse(code).map(Self::Custom)
     }
 }
 
 impl std::fmt::Display for Currency {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.code())
+    }
+}
+
+impl AsRef<str> for Currency {
+    fn as_ref(&self) -> &str {
+        self.code()
+    }
+}
+
+#[cfg(feature = "json-schema")]
+impl schemars::JsonSchema for Currency {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Currency".into()
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        concat!(module_path!(), "::Currency").into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "minLength": 1,
+            "maxLength": MAX_CUSTOM_UNIT_CODE_LEN,
+            "pattern": "^[A-Za-z0-9_.:/-]+$"
+        })
     }
 }
 
@@ -251,7 +286,7 @@ impl<'de> Deserialize<'de> for Currency {
 
 impl From<Currency> for CelValue {
     fn from(c: Currency) -> Self {
-        c.code().into()
+        c.code().to_owned().into()
     }
 }
 
@@ -283,8 +318,6 @@ impl PartialOrd for Currency {
 pub enum ParseCurrencyError {
     #[error("CalaCoreTypeError - InvalidUnitCode: {0}")]
     InvalidUnitCode(String),
-    #[error("CalaCoreTypeError - CustomUnitRegistryFull")]
-    CustomUnitRegistryFull,
 }
 
 impl std::str::FromStr for Currency {
@@ -295,7 +328,20 @@ impl std::str::FromStr for Currency {
             Some(c) => Ok(Currency::Iso(c)),
             _ => match crypto::find(s) {
                 Some(c) => Ok(Currency::Crypto(c)),
-                _ => Currency::parse_custom(s),
+                _ => {
+                    // Known monetary codes are case-insensitive aliases and
+                    // always normalize to the canonical registry spelling.
+                    // This prevents `usd` and `USD` from becoming distinct
+                    // conserved units while custom codes remain case-sensitive.
+                    let canonical = s.to_ascii_uppercase();
+                    match iso::find(&canonical) {
+                        Some(c) => Ok(Currency::Iso(c)),
+                        None => match crypto::find(&canonical) {
+                            Some(c) => Ok(Currency::Crypto(c)),
+                            None => Currency::parse_custom(s),
+                        },
+                    }
+                }
             },
         }
     }
@@ -309,9 +355,9 @@ impl TryFrom<String> for Currency {
     }
 }
 
-impl From<Currency> for &'static str {
+impl From<Currency> for String {
     fn from(c: Currency) -> Self {
-        c.code()
+        c.code().to_owned()
     }
 }
 
@@ -341,6 +387,8 @@ impl TryFrom<CelResult<'_>> for Currency {
 mod tests {
     use crate::primitives::Currency;
 
+    fn assert_copy<T: Copy>() {}
+
     #[test]
     fn currency_constants() {
         assert_eq!(Currency::USD, "USD".parse().unwrap());
@@ -363,5 +411,37 @@ mod tests {
         assert!("".parse::<Currency>().is_err());
         assert!("a unit with spaces".parse::<Currency>().is_err());
         assert!("x".repeat(65).parse::<Currency>().is_err());
+    }
+
+    #[test]
+    fn custom_units_have_no_process_global_exhaustion_limit() {
+        assert_copy::<Currency>();
+
+        for index in 0..70_000_u32 {
+            let code = format!("UNIT_{index}");
+            let parsed: Currency = code.parse().expect("each inline unit must parse");
+            assert_eq!(parsed.code(), code);
+        }
+
+        let persisted = "PERSISTED_AFTER_70000";
+        let decoded: Currency = serde_json::from_str(&format!("\"{persisted}\""))
+            .expect("persisted unit must remain decodable regardless of prior ingress");
+        assert_eq!(decoded.code(), persisted);
+    }
+
+    #[test]
+    fn lower_case_known_codes_normalize_instead_of_creating_custom_aliases() {
+        let lower_iso: Currency = "usd".parse().unwrap();
+        let lower_crypto: Currency = "btc".parse().unwrap();
+        let lower_custom: Currency = "widgets".parse().unwrap();
+        let upper_custom: Currency = "WIDGETS".parse().unwrap();
+
+        assert_eq!(lower_iso, Currency::USD);
+        assert_eq!(lower_iso.code(), "USD");
+        assert_eq!(lower_crypto, Currency::BTC);
+        assert_eq!(lower_crypto.code(), "BTC");
+        assert_eq!(serde_json::to_string(&lower_iso).unwrap(), "\"USD\"");
+        assert_eq!(lower_custom.code(), "widgets");
+        assert_ne!(lower_custom, upper_custom);
     }
 }

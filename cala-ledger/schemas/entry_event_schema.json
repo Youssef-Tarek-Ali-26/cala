@@ -21,7 +21,10 @@
   ],
   "$defs": {
     "Currency": {
-      "type": "string"
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.:/-]+$"
     },
     "DebitOrCredit": {
       "type": "string",

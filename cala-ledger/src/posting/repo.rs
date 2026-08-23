@@ -97,7 +97,7 @@ const INSERT_SNAPSHOT_BATCH_SIZE: usize = 5_000;
 pub(super) struct BalanceKeys {
     pub journal_ids: Vec<JournalId>,
     pub account_ids: Vec<AccountId>,
-    pub currencies: Vec<&'static str>,
+    pub currencies: Vec<String>,
 }
 
 impl BalanceKeys {
@@ -113,7 +113,7 @@ impl BalanceKeys {
     ) {
         self.journal_ids.push(journal_id);
         self.account_ids.push(account_id);
-        self.currencies.push(currency.code());
+        self.currencies.push(currency.code().to_owned());
     }
 
     /// Deduped and sorted into the canonical acquisition order. Sorting here
@@ -296,7 +296,7 @@ impl PostingRows {
 struct SnapshotColumns {
     journal_ids: Vec<JournalId>,
     account_ids: Vec<AccountId>,
-    currencies: Vec<&'static str>,
+    currencies: Vec<String>,
     versions: Vec<i32>,
     entry_ids: Vec<EntryId>,
     values: Vec<serde_json::Value>,
@@ -308,7 +308,7 @@ impl From<&[BalanceSnapshot]> for SnapshotColumns {
         for balance in snapshots {
             out.journal_ids.push(balance.journal_id);
             out.account_ids.push(balance.account_id);
-            out.currencies.push(balance.currency.code());
+            out.currencies.push(balance.currency.code().to_owned());
             out.versions.push(balance.version as i32);
             out.entry_ids.push(balance.entry_id);
             out.values
@@ -384,7 +384,7 @@ impl PostingRepo {
             EC_SET_LOCK_CLASS,
             &keys.journal_ids as &[JournalId],
             &keys.account_ids as &[AccountId],
-            &keys.currencies as &[&str],
+            &keys.currencies as &[String],
             codes,
             manual_now,
         )
@@ -476,7 +476,7 @@ impl PostingRepo {
             journal_ids as &[JournalId],
             &keys.journal_ids as &[JournalId],
             &keys.account_ids as &[AccountId],
-            &keys.currencies as &[&str],
+            &keys.currencies as &[String],
         )
         .fetch_one(op.as_executor())
         .await?;
@@ -550,7 +550,7 @@ impl PostingRepo {
             set_account_ids as &[AccountId],
             &keys.journal_ids as &[JournalId],
             &keys.account_ids as &[AccountId],
-            &keys.currencies as &[&str],
+            &keys.currencies as &[String],
         )
         .fetch_one(op.as_executor())
         .await?;
@@ -672,7 +672,7 @@ impl PostingRepo {
             &rows.entry_events.events,
             &balances.journal_ids as &[JournalId],
             &balances.account_ids as &[AccountId],
-            &balances.currencies as &[&str],
+            &balances.currencies as &[String],
             &balances.versions,
             &balances.entry_ids as &[EntryId],
             &balances.values,
@@ -763,7 +763,7 @@ impl PostingRepo {
             "#,
             &balances.journal_ids as &[JournalId],
             &balances.account_ids as &[AccountId],
-            &balances.currencies as &[&str],
+            &balances.currencies as &[String],
             &balances.versions,
             &balances.entry_ids as &[EntryId],
             &balances.values,

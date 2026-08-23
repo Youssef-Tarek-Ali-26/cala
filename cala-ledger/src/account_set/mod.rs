@@ -787,7 +787,7 @@ impl AccountSets {
         journal_id: JournalId,
         probe_epoch: i64,
         probe_seeds: &[AccountMembership],
-        entry_pairs: &(Vec<AccountId>, Vec<&str>),
+        entry_pairs: &(Vec<AccountId>, Vec<String>),
     ) -> Result<HashMap<AccountId, Vec<AccountSetId>>, AccountSetError> {
         self.set_graph_cache
             .resolve_from_probe_in_op(op, journal_id, probe_epoch, probe_seeds, entry_pairs)

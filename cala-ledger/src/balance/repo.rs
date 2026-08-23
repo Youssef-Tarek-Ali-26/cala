@@ -664,7 +664,7 @@ impl BalanceRepo {
         &self,
         op: &mut impl es_entity::AtomicOperation,
         journal_id: JournalId,
-        (account_ids, currencies): &(Vec<AccountId>, Vec<&str>),
+        (account_ids, currencies): &(Vec<AccountId>, Vec<String>),
     ) -> Result<HashMap<(AccountId, Currency), Option<BalanceSnapshot>>, BalanceError> {
         // Acquire the shared advisory locks in canonical `AccountId` order
         // so overlapping callers serialize without deadlock. The `ORDER BY`
@@ -699,7 +699,7 @@ impl BalanceRepo {
             "#,
             journal_id as JournalId,
             account_ids as &[AccountId],
-            currencies as &[&str],
+            currencies as &[String],
         )
         .fetch_all(op.as_executor())
         .await?;

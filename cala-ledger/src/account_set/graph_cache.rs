@@ -276,7 +276,7 @@ impl SetGraphCache {
         journal_id: JournalId,
         probe_epoch: i64,
         probe_seeds: &[AccountMembership],
-        entry_pairs: &(Vec<AccountId>, Vec<&str>),
+        entry_pairs: &(Vec<AccountId>, Vec<String>),
     ) -> Result<HashMap<AccountId, Vec<AccountSetId>>, AccountSetError> {
         let span = tracing::Span::current();
         let probe = DirectMembershipProbe {
@@ -623,15 +623,15 @@ impl SetGraphCache {
     /// canonical acquisition. Returns `None` if any set id is unknown —
     /// caller falls back to the walk.
     #[allow(clippy::type_complexity)]
-    fn expand<'c>(
+    fn expand(
         snapshot: &GraphSnapshot,
         overlay: Option<&Overlay>,
         journal_id: JournalId,
         seeds: &[AccountMembership],
-        (entry_account_ids, entry_currencies): &(Vec<AccountId>, Vec<&'c str>),
+        (entry_account_ids, entry_currencies): &(Vec<AccountId>, Vec<String>),
     ) -> Option<(
         HashMap<AccountId, Vec<AccountSetId>>,
-        (Vec<AccountSetId>, Vec<&'c str>),
+        (Vec<AccountSetId>, Vec<String>),
     )> {
         let meta_of = |set_id: &AccountSetId| -> Option<SetMeta> {
             snapshot
@@ -685,7 +685,7 @@ impl SetGraphCache {
             }
         }
 
-        let mut lock_pairs: Vec<(AccountSetId, &str)> = entry_account_ids
+        let mut lock_pairs: Vec<(AccountSetId, String)> = entry_account_ids
             .iter()
             .zip(entry_currencies.iter())
             .flat_map(|(account_id, currency)| {
@@ -693,7 +693,7 @@ impl SetGraphCache {
                     .get(account_id)
                     .into_iter()
                     .flatten()
-                    .map(move |set_id| (*set_id, *currency))
+                    .map(move |set_id| (*set_id, currency.clone()))
             })
             .collect();
         lock_pairs.sort_unstable();

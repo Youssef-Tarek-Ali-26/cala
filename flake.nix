@@ -425,6 +425,9 @@
         echo "Running nextest..."
         cargo nextest run --verbose --locked --workspace
 
+        echo "Running Norn Turso storage contract tests..."
+        cargo nextest run --verbose --locked -p cala-ledger --features turso-storage
+
         echo "Running doc tests..."
         cargo test --doc --workspace
 

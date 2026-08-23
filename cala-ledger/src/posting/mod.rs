@@ -458,11 +458,11 @@ impl Postings {
         let mut ancestor_keys = BalanceKeys::default();
         let mut ancestor_ids: Vec<AccountId> = Vec::new();
         for journal_id in journals {
-            let entry_pairs: (Vec<AccountId>, Vec<&str>) = prepared
+            let entry_pairs: (Vec<AccountId>, Vec<String>) = prepared
                 .iter()
                 .filter(|p| p.journal_id == journal_id)
                 .flat_map(|p| p.entries.iter())
-                .map(|e| (e.account_id(), e.currency().code()))
+                .map(|e| (e.account_id(), e.currency().code().to_owned()))
                 .collect::<HashSet<_>>()
                 .into_iter()
                 .unzip();
@@ -664,7 +664,7 @@ impl Postings {
         for ((journal_id, effective), entries) in groups {
             // Only this journal's ancestor sets; see `resolve_ancestors`.
             let mappings = mappings.get(&journal_id).unwrap_or(&empty);
-            let involved: (Vec<AccountId>, Vec<&str>) = entries
+            let involved: (Vec<AccountId>, Vec<String>) = entries
                 .iter()
                 .flat_map(|entry| {
                     mappings
@@ -682,7 +682,7 @@ impl Postings {
                 })
                 .collect::<HashSet<_>>()
                 .into_iter()
-                .map(|(id, currency)| (id, currency.code()))
+                .map(|(id, currency)| (id, currency.code().to_owned()))
                 .unzip();
             if involved.0.is_empty() {
                 continue;

@@ -325,8 +325,10 @@ impl Balances {
         if involved.is_empty() {
             return Ok(());
         }
-        let (account_ids, currencies): (Vec<AccountId>, Vec<&str>) =
-            involved.into_iter().map(|(a, c)| (a, c.code())).unzip();
+        let (account_ids, currencies): (Vec<AccountId>, Vec<String>) = involved
+            .into_iter()
+            .map(|(a, c)| (a, c.code().to_owned()))
+            .unzip();
 
         let mut current_balances = self
             .repo
@@ -373,8 +375,10 @@ impl Balances {
                 if tx_involved.is_empty() {
                     continue;
                 }
-                let (account_ids, currencies): (Vec<AccountId>, Vec<&str>) =
-                    tx_involved.into_iter().map(|(a, c)| (a, c.code())).unzip();
+                let (account_ids, currencies): (Vec<AccountId>, Vec<String>) = tx_involved
+                    .into_iter()
+                    .map(|(a, c)| (a, c.code().to_owned()))
+                    .unzip();
                 self.effective
                     .apply_ec_rollup_in_op(
                         op,
