@@ -12,6 +12,7 @@ include = [
   ".sqlx/**",
   "build.rs",
   "migrations/**",
+  "migrations-turso/**",
   "schemas/**",
   "src/**",
   "tests/**",
@@ -22,6 +23,7 @@ include = [
 [features]
 
 fail-on-warnings = []
+turso-storage = ["dep:sha2", "dep:turso"]
 # Exposes `cala_ledger::fuzz` — internal harnesses that drive pub(crate) logic
 # for the out-of-tree cargo-fuzz crate. Not part of the public API.
 fuzz = []
@@ -53,6 +55,8 @@ tokio = { workspace = true }
 tokio-stream = { workspace = true }
 futures = { workspace = true }
 rust_decimal = { workspace = true }
+sha2 = { workspace = true, optional = true }
+turso = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -60,5 +64,6 @@ anyhow = { workspace = true }
 rand = { workspace = true }
 tokio-test = "0.4"
 rust_decimal_macros = { workspace = true }
+tempfile = "3.27"
 
 [build-dependencies]

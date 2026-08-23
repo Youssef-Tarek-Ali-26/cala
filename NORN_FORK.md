@@ -10,6 +10,28 @@ Purpose: preserve Cala's ledger domain model while making conserved units open a
 - Custom codes are process-interned so the existing `Copy` API and balance-key representation remain compatible.
 - Codes are limited to 64 ASCII alphanumeric or `_-.:/` characters and the process registry is bounded to 65,536 distinct custom units.
 - JSON serialization/deserialization and CEL coercion continue to use the stable string code.
+- The optional `turso-storage` feature exact-pins embedded Turso
+  `0.8.0-pre.7` and compiles a private `Db`/`ReadOp`/`WriteOp` seam. Existing
+  public CALA repositories still use Postgres and are not yet threaded through
+  this seam.
+- Authority writes are constructed only with `TransactionBehavior::Immediate`;
+  scoped migration/probe failures explicitly roll back before returning.
+  Deferred and concurrent writes are outside the admitted Norn profile.
+- Reads use a separate connection configured and tested with
+  `PRAGMA query_only = 1`. Both connections assert the pinned profile:
+  `journal_mode=wal`, `synchronous=FULL`, foreign keys enabled, and a bounded
+  50 ms busy timeout. Cross-process ownership/fencing still belongs to Norn.
+- `migrations-turso/0001_core.sql` defines the first SQLite-compatible core
+  tables. The embedded bytes are SHA-256 checked, and open fails closed if an
+  existing migration name, version, or fingerprint is unknown. The schema
+  restores CALA's global external-transaction identity and constrains stored
+  status/layer/direction values to CALA's lowercase enum encodings.
+- The pinned-engine probe covers recursive CTEs, window functions, row-value
+  comparison, partial-UNIQUE NULL/duplicate behavior, `RETURNING`, JSON
+  functions, and specifically classified composite foreign-key enforcement.
+- Stored generated columns are not admitted: pinned Turso requires an
+  experimental builder flag for them. The core schema does not depend on that
+  feature.
 
 ## Planned Turso port order
 

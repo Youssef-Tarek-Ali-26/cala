@@ -138,6 +138,8 @@
 mod cel_context;
 mod ec_rollup;
 mod param;
+#[cfg(feature = "turso-storage")]
+mod storage;
 
 pub mod account;
 pub mod account_set;
